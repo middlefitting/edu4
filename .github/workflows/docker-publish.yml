@@ -16,11 +16,13 @@ jobs:
     permissions:
       packages: write
       contents: read
+
     steps:
       - name: Check out the repo
         uses: actions/checkout@v3
+
       - name: Log in to the Container registry
-        uses: docker/login-action@f054a8b539a109f9f41c372932f1ae047eff08c9
+        uses: docker/login-action@v2
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -28,15 +30,43 @@ jobs:
       
       - name: Extract metadata (tags, labels) for Docker
         id: meta
-        uses: docker/metadata-action@98669ae865ea3cffbcbaa878cf57c20bbf1c6c38
+        uses: docker/metadata-action@v4
         with:
           images: ghcr.io/${{ github.repository }}
-          tags: ${{ github.event.inputs.name }} 
-      
+          # release 이벤트에서 github.event.inputs.name 대신 release tag(ref_name)를 쓰는 경우가 많음
+          # 상황에 맞춰 수정하세요.
+          tags: ${{ github.event.inputs.name }}
+
       - name: Build and push Docker images
-        uses: docker/build-push-action@ad44023a93711e3deb337508980b4b5e9bcdc5dc
+        id: build-and-push
+        uses: docker/build-push-action@v4
         with:
           context: .
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+
+      - name: Install Trivy
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y wget apt-transport-https gnupg lsb-release
+          wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key | sudo apt-key add -
+          echo deb https://aquasecurity.github.io/trivy-repo/deb $(lsb_release -sc) main | sudo tee -a /etc/apt/sources.list.d/trivy.list
+          sudo apt-get update -y
+          sudo apt-get install trivy -y
+      
+      - name: Scan Docker image with Trivy
+        run: |
+          echo "Scanning the image(s) with Trivy..."
+          
+          echo "Found tags: ${{ steps.meta.outputs.tags }}"
+          
+          for image_tag in ${{ steps.meta.outputs.tags }}; do
+            echo "Pulling and scanning $image_tag ..."
+            docker pull "$image_tag"
+            # 아래 --severity로 스캔 범위 지정 (CRITICAL,HIGH,MEDIUM 등)
+            trivy image "$image_tag" \
+              --severity CRITICAL,HIGH \
+              --exit-code 0 \
+              --format table
+          done
